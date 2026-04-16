@@ -81,8 +81,10 @@ pid_t process_execute(const char* file_name) {
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
   fn_copy = palloc_get_page(0);
-  if (fn_copy == NULL)
+  if (fn_copy == NULL) {
+    free(args);
     return TID_ERROR;
+  }
   strlcpy(fn_copy, file_name, PGSIZE);
 
   /* Parse all the args */
@@ -103,7 +105,7 @@ pid_t process_execute(const char* file_name) {
   args->argv[args->argc] = NULL;
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create(file_name, PRI_DEFAULT, start_process, args);
+  tid = thread_create(args->argv[0], PRI_DEFAULT, start_process, args);
   if (tid == TID_ERROR) {
     palloc_free_page(fn_copy);
     free(args);
@@ -157,6 +159,7 @@ static void start_process(void* args_) {
 
   /* Clean up. Exit on failure or jump to userspace */
   palloc_free_page(file_name);
+  free(args);
   if (!success) {
     sema_up(&temporary);
     thread_exit();
