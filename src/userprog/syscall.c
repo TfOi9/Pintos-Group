@@ -31,6 +31,7 @@ static void syscall_bad_access_exit(void) {
 
   ASSERT(cur->pcb != NULL);
   cur->pcb->exit_status = -1;
+  printf("%s: exit(%d)\n", cur->pcb->process_name, cur->pcb->exit_status);
 
   process_exit();
   NOT_REACHED();
@@ -146,6 +147,10 @@ static bool copy_in_string(char* kdst, const char* ustr, size_t max_len) {
 
 static void syscall_handler(struct intr_frame* f UNUSED) {
   uint32_t* args = ((uint32_t*)f->esp);
+  uint32_t arg0;
+  if (fetch_arg_u32(f, 0, &arg0) == false) {
+    syscall_bad_access_exit();
+  }
 
   /*
    * The following print statement, if uncommented, will print out the syscall
@@ -154,13 +159,22 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
    * include it in your final submission.
    */
 
-  /* printf("System call number: %d\n", args[0]); */
+  /* printf("System call number: %d\n", arg0); */
 
   switch (args[0]) {
     case SYS_WRITE: {
-      int fd = (int)args[1];
-      const char* buffer = (const char*)args[2];
-      unsigned size = (unsigned)args[3];
+      int fd;
+      if (fetch_arg_u32(f, 1, (uint32_t*)&fd) == false) {
+        syscall_bad_access_exit();
+      }
+      const char* buffer;
+      if (fetch_arg_u32(f, 2, (uint32_t*)&buffer) == false) {
+        syscall_bad_access_exit();
+      }
+      unsigned size;
+      if (fetch_arg_u32(f, 3, (uint32_t*)(&size)) == false) {
+        syscall_bad_access_exit();
+      }
 
       if (fd == STDOUT_FILENO) {
         putbuf(buffer, size);
@@ -172,7 +186,9 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
     }
 
     case SYS_EXIT:
-      f->eax = args[1];
+      if (fetch_arg_u32(f, 1, &(f->eax)) == false) {
+        syscall_bad_access_exit();
+      }
       printf("%s: exit(%d)\n", thread_current()->pcb->process_name, args[1]);
       process_exit();
       break;
