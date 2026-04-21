@@ -2,13 +2,147 @@
 #include <stdio.h>
 #include <syscall-nr.h>
 #include "lib/kernel/stdio.h"
+#include "pagedir.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "threads/vaddr.h"
 #include "userprog/process.h"
+
+static void syscall_bad_access_exit(void);
+
+static bool validate_user_uaddr(const void* uaddr);
+
+static bool read_user_u8(const uint8_t* uaddr, uint8_t* out);
+
+static bool copy_in(void* kdst, const void* usrc, size_t size);
+
+static bool fetch_arg_u32(struct intr_frame* f, size_t index, uint32_t* out);
+
+static bool fetch_args_u32(struct intr_frame* f, size_t cnt, uint32_t out[]);
+
+static bool copy_in_string(char* kdst, const char* ustr, size_t max_len);
 
 static void syscall_handler(struct intr_frame*);
 
 void syscall_init(void) { intr_register_int(0x30, 3, INTR_ON, syscall_handler, "syscall"); }
+
+static void syscall_bad_access_exit(void) {
+  struct thread* cur = thread_current();
+
+  ASSERT(cur->pcb != NULL);
+  cur->pcb->exit_status = -1;
+
+  process_exit();
+  NOT_REACHED();
+}
+
+static bool validate_user_uaddr(const void* uaddr) {
+  if (uaddr == NULL) {
+    return false;
+  }
+
+  if (!is_user_vaddr(uaddr)) {
+    return false;
+  }
+
+  struct thread* cur = thread_current();
+  if (cur->pcb == NULL) {
+    return false;
+  }
+  if (cur->pcb->pagedir == NULL) {
+    return false;
+  }
+
+  if (pagedir_get_page(cur->pcb->pagedir, uaddr) == NULL) {
+    return false;
+  }
+
+  return true;
+}
+
+static bool read_user_u8(const uint8_t* uaddr, uint8_t* out) {
+  if (validate_user_uaddr(uaddr) == false) {
+    return false;
+  }
+
+  struct thread* cur = thread_current();
+  void* page = pagedir_get_page(cur->pcb->pagedir, uaddr);
+  *out = *((uint8_t*)uaddr);
+
+  return true;
+}
+
+static bool copy_in(void* kdst, const void* usrc, size_t size) {
+  if (kdst == NULL) {
+    return false;
+  }
+
+  if (size == 0) {
+    return true;
+  }
+
+  for (size_t i = 0; i < size; i++) {
+    uint8_t out_u8 = 0;
+    if (read_user_u8(usrc + i, &out_u8) == false) {
+      return false;
+    }
+    *((uint8_t*)(kdst + i)) = out_u8;
+  }
+
+  return true;
+}
+
+static bool fetch_arg_u32(struct intr_frame* f, size_t index, uint32_t* out) {
+  if (f == NULL) {
+    return false;
+  }
+
+  uint8_t* arg_addr = f->esp + index * 4;
+  uint32_t out_u32 = 0;
+  if (copy_in(&out_u32, arg_addr, 4) == false) {
+    return false;
+  }
+  *out = out_u32;
+
+  return true;
+}
+
+static bool fetch_args_u32(struct intr_frame* f, size_t cnt, uint32_t out[]) {
+  if (f == NULL) {
+    return false;
+  }
+
+  uint8_t* arg_addr = f->esp;
+  for (size_t i = 0; i < cnt; i++) {
+    if (fetch_arg_u32(f, i, out + i) == false) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+static bool copy_in_string(char* kdst, const char* ustr, size_t max_len) {
+  if (kdst == NULL || ustr == NULL) {
+    return false;
+  }
+
+  uint8_t out_u8 = 0;
+  for (size_t i = 0; i < max_len; i++) {
+    if (ustr[i] == '\0') {
+      return true;
+    }
+    if (read_user_u8((uint8_t*)(ustr + i), &out_u8) == false) {
+      return false;
+    }
+    kdst[i] = (char)out_u8;
+  }
+
+  if (ustr[max_len] == '\0') {
+    return true;
+  }
+  return false;
+}
 
 static void syscall_handler(struct intr_frame* f UNUSED) {
   uint32_t* args = ((uint32_t*)f->esp);

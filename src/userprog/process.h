@@ -27,6 +27,7 @@ struct process {
   uint32_t* pagedir;          /* Page directory. */
   char process_name[16];      /* Name of the main thread */
   struct thread* main_thread; /* Pointer to main thread */
+  int exit_status;            /* Status exit code */
 };
 
 void userprog_init(void);
