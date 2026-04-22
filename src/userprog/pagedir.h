@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "process.h"
 
 uint32_t* pagedir_create(void);
 void pagedir_destroy(uint32_t* pd);
@@ -15,5 +16,9 @@ bool pagedir_is_accessed(uint32_t* pd, const void* upage);
 void pagedir_set_accessed(uint32_t* pd, const void* upage, bool accessed);
 void pagedir_activate(uint32_t* pd);
 uint32_t* active_pd(void);
+
+static bool clone_pagedir(struct process* child_pcb, struct process* parent_pcb);
+static bool clone_user_page(uint32_t* child_pd, uint32_t* parent_pd, void* upage);
+static bool is_user_page_writable(uint32_t* pd, const void* upage);
 
 #endif /* userprog/pagedir.h */

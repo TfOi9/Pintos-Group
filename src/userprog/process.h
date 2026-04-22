@@ -2,6 +2,7 @@
 #define USERPROG_PROCESS_H
 
 #include "threads/thread.h"
+#include "threads/interrupt.h"
 #include <stdint.h>
 
 // At most 8MB can be allocated to the stack
@@ -35,6 +36,7 @@ struct process {
 void userprog_init(void);
 
 pid_t process_execute(const char* file_name);
+pid_t process_fork(struct intr_frame* parent_if);
 int process_wait(pid_t);
 void process_exit(void);
 void process_activate(void);

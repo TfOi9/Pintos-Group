@@ -2,9 +2,11 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <string.h>
+#include "process.h"
 #include "threads/init.h"
 #include "threads/pte.h"
 #include "threads/palloc.h"
+#include "threads/vaddr.h"
 
 static void invalidate_pagedir(uint32_t*);
 
@@ -221,4 +223,77 @@ static void invalidate_pagedir(uint32_t* pd) {
          "Translation Lookaside Buffers (TLBs)". */
     pagedir_activate(pd);
   }
+}
+
+/* Clone the parent process's page directory to the child's */
+static bool clone_pagedir(struct process* child_pcb, struct process* parent_pcb) {
+  if (child_pcb == NULL || parent_pcb == NULL) {
+    return false;
+  }
+
+  uint32_t* parent_pd = parent_pcb->pagedir;
+  uint32_t* child_pd = parent_pcb->pagedir;
+  uint32_t* pde;
+
+  ASSERT(parent_pd != NULL);
+  ASSERT(child_pd != NULL);
+
+  /* Iterate over all the pagedirs in user memory */
+  for (pde = parent_pd; pde < parent_pd + pd_no(PHYS_BASE); pde++) {
+    if (*pde & PTE_P) {
+      /* Fetch the page table of the parent process */
+      uint32_t* parent_pt = pde_get_pt(*pde);
+      uint32_t* pte;
+
+      /* Iterate over all the items in the page table */
+      for (pte = parent_pt; pte < parent_pt + PGSIZE / sizeof(*pte); pte++) {
+        if (*pte & PTE_P) {
+          /* Calculate the user's virtual address */
+          void* upage = ptov(((uintptr_t)(pde - parent_pd) << PDSHIFT) |
+                             ((uintptr_t)(pte - parent_pt) << PTSHIFT));
+          /* Clone a single user page */
+          if (!clone_user_page(child_pd, parent_pd, upage)) {
+            return false;
+          }
+        }
+      }
+    }
+  }
+
+  return true;
+}
+
+/* Clone a single user page */
+static bool clone_user_page(uint32_t* child_pd, uint32_t* parent_pd, void* upage) {
+  /* Fetch the physical address of the parent process */
+  void* parent_kpage = pagedir_get_page(parent_pd, upage);
+  if (parent_kpage == NULL) {
+    return false;
+  }
+
+  /* Check if the page is writable */
+  bool writable = is_user_page_writable(parent_pd, upage);
+
+  /* Allocate new physical pages for the child process */
+  void* child_kpage = palloc_get_page(PAL_USER);
+  if (child_kpage == NULL) {
+    return false;
+  }
+
+  /* Copy the page contents */
+  memcpy(child_kpage, parent_kpage, PGSIZE);
+
+  /* Map the page into the child process's page directory */
+  if (!pagedir_set_page(child_pd, upage, child_kpage, writable)) {
+    palloc_free_page(child_kpage);
+    return false;
+  }
+
+  return true;
+}
+
+/* Check if the user page is writable */
+static bool is_user_page_writable(uint32_t* pd, const void* upage) {
+  uint32_t* pte = lookup_page(pd, upage, false);
+  return pte != NULL && (*pte & PTE_W) != 0;
 }

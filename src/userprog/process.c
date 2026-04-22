@@ -177,15 +177,6 @@ struct process_args {
    FILENAME.  The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
    process id, or TID_ERROR if the thread cannot be created. */
-
-/* TODO
-  1. Parse the arguments in file_name, separate out the arguments
-  2. Define a struct to pass parsed arguments
-  3. Modify start_process to receive arguments
-  4. Modify load to receive argc and argv
-  5. Implement setup_stack to initialize user stack
-  
-  May need to modify process.h and thread.h */
 pid_t process_execute(const char* file_name) {
   char* fn_copy;
   tid_t tid;
@@ -257,6 +248,15 @@ pid_t process_execute(const char* file_name) {
 
   return tid;
 }
+
+struct fork_args {
+  struct intr_frame* parent_if;
+  struct child_sync* cs;
+  struct process* parent_pcb;
+  char child_name[16];
+};
+
+pid_t process_fork(struct intr_frame* parent_if) {}
 
 /* A thread function that loads a user process and starts it
    running. */
