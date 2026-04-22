@@ -7,6 +7,7 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "userprog/process.h"
+#include "devices/shutdown.h"
 
 static void syscall_bad_access_exit(void);
 
@@ -181,12 +182,28 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
       break;
     }
 
-    case SYS_EXIT:
+    case SYS_EXIT: {
       if (fetch_arg_u32(f, 1, &(f->eax)) == false) {
         syscall_bad_access_exit();
       }
       set_process_exit_status(f->eax);
       process_exit();
       break;
+    }
+
+    case SYS_PRACTICE: {
+      int i;
+      if (fetch_arg_u32(f, 1, (uint32_t*)&i) == false) {
+        syscall_bad_access_exit();
+      }
+      f->eax = i + 1;
+      set_process_exit_status(0);
+      break;
+    }
+
+    case SYS_HALT: {
+      shutdown_power_off();
+      break;
+    }
   }
 }
