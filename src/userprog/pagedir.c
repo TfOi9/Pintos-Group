@@ -226,7 +226,7 @@ static void invalidate_pagedir(uint32_t* pd) {
 }
 
 /* Clone the parent process's page directory to the child's */
-static bool clone_pagedir(struct process* child_pcb, struct process* parent_pcb) {
+bool clone_pagedir(struct process* child_pcb, struct process* parent_pcb) {
   if (child_pcb == NULL || parent_pcb == NULL) {
     return false;
   }
@@ -264,7 +264,7 @@ static bool clone_pagedir(struct process* child_pcb, struct process* parent_pcb)
 }
 
 /* Clone a single user page */
-static bool clone_user_page(uint32_t* child_pd, uint32_t* parent_pd, void* upage) {
+bool clone_user_page(uint32_t* child_pd, uint32_t* parent_pd, void* upage) {
   /* Fetch the physical address of the parent process */
   void* parent_kpage = pagedir_get_page(parent_pd, upage);
   if (parent_kpage == NULL) {
@@ -293,7 +293,7 @@ static bool clone_user_page(uint32_t* child_pd, uint32_t* parent_pd, void* upage
 }
 
 /* Check if the user page is writable */
-static bool is_user_page_writable(uint32_t* pd, const void* upage) {
+bool is_user_page_writable(uint32_t* pd, const void* upage) {
   uint32_t* pte = lookup_page(pd, upage, false);
   return pte != NULL && (*pte & PTE_W) != 0;
 }

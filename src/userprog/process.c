@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "list.h"
+#include "pagedir.h"
 #include "userprog/gdt.h"
 #include "userprog/pagedir.h"
 #include "userprog/tss.h"
@@ -250,13 +251,131 @@ pid_t process_execute(const char* file_name) {
 }
 
 struct fork_args {
-  struct intr_frame* parent_if;
+  struct intr_frame parent_if;
   struct child_sync* cs;
   struct process* parent_pcb;
   char child_name[16];
 };
 
-pid_t process_fork(struct intr_frame* parent_if) {}
+static void start_fork(void* args_) {
+  struct fork_args* args = (struct fork_args*)args_;
+  struct child_sync* cs = args->cs;
+  struct process* parent_pcb = args->parent_pcb;
+  struct thread* t = thread_current();
+  struct intr_frame if_;
+  bool success = false;
+
+  /* Allocate and initialize PCB for the child process */
+  struct process* child_pcb = malloc(sizeof(struct process));
+  if (child_pcb == NULL) {
+    goto done;
+  }
+
+  child_pcb->pagedir = NULL;
+  child_pcb->main_thread = t;
+  child_pcb->exit_status = -1;
+  list_init(&child_pcb->children);
+  child_pcb->self_sync = cs;
+  strlcpy(child_pcb->process_name, args->child_name, sizeof(child_pcb->process_name));
+
+  t->pcb = child_pcb;
+
+  /* Create child page directory and clone parent user memory */
+  child_pcb->pagedir = pagedir_create();
+  if (child_pcb->pagedir == NULL) {
+    goto done;
+  }
+  if (!clone_pagedir(child_pcb, parent_pcb)) {
+    goto done;
+  }
+
+  /* Clone file discriptors */
+  /* TBD */
+
+  /* Prepare the child process's interrupt frame */
+  memcpy(&if_, &args->parent_if, sizeof(if_));
+  if_.eax = 0;
+
+  process_activate();
+  success = true;
+
+done:
+  /* Notice the parent process */
+  child_sync_set_load(cs, success);
+  child_sync_put(cs);
+  free(args);
+
+  if (!success) {
+    /* Clone failed, cleanup and quit */
+    if (child_pcb != NULL) {
+      if (child_pcb->pagedir != NULL) {
+        pagedir_destroy(child_pcb->pagedir);
+      }
+      free(child_pcb);
+    }
+    t->pcb = NULL;
+    thread_exit();
+  }
+
+  /* Jump to user state and execute */
+  asm volatile("movl %0, %%esp; jmp intr_exit" : : "g"(&if_) : "memory");
+  NOT_REACHED();
+}
+
+pid_t process_fork(struct intr_frame* parent_if) {
+  struct thread* cur = thread_current();
+  struct fork_args* args;
+  struct child_sync* cs;
+  tid_t tid;
+
+  /* Create a sync struct for the child process */
+  cs = child_sync_create(0);
+  if (cs == NULL) {
+    return TID_ERROR;
+  }
+
+  /* Allocate and initialize fork arguments */
+  args = malloc(sizeof(struct fork_args));
+  if (args == NULL) {
+    child_sync_put(cs);
+    return TID_ERROR;
+  }
+
+  /* Copy the parent process's interrupt frame */
+  memcpy(&args->parent_if, parent_if, sizeof(struct intr_frame));
+  args->cs = cs;
+  args->parent_pcb = cur->pcb;
+
+  /* Setup the child process's name */
+  snprintf(args->child_name, sizeof(args->child_name), "%s fork", cur->pcb->process_name);
+
+  /* Reserve a child sync reference for the child thread */
+  child_sync_get(cs);
+
+  /* Create the kernel thread to execute start_fork */
+  tid = thread_create(args->child_name, PRI_DEFAULT, start_fork, args);
+  if (tid == TID_ERROR) {
+    /* Release the child and parent references of sync */
+    child_sync_put(cs);
+    child_sync_put(cs);
+    free(args);
+    return TID_ERROR;
+  }
+
+  /* Setup child process's PID */
+  cs->pid = tid;
+
+  list_push_front(&cur->pcb->children, &cs->elem);
+
+  sema_down(&cs->load_sema);
+  if (!cs->load_success) {
+    list_remove(&cs->elem);
+    child_sync_put(cs);
+    return TID_ERROR;
+  }
+
+  return tid;
+}
 
 /* A thread function that loads a user process and starts it
    running. */
