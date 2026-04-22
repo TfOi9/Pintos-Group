@@ -1,9 +1,11 @@
 #include "userprog/syscall.h"
 #include <stdio.h>
+#include <string.h>
 #include <syscall-nr.h>
 #include "lib/kernel/stdio.h"
 #include "pagedir.h"
 #include "threads/interrupt.h"
+#include "threads/malloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "userprog/process.h"
@@ -20,6 +22,8 @@ static bool copy_in(void* kdst, const void* usrc, size_t size);
 static bool fetch_arg_u32(struct intr_frame* f, size_t index, uint32_t* out);
 
 static bool fetch_args_u32(struct intr_frame* f, size_t cnt, uint32_t out[]);
+
+static bool validate_string(const char* ustr);
 
 static bool copy_in_string(char* kdst, const char* ustr, size_t max_len);
 
@@ -119,6 +123,24 @@ static bool fetch_args_u32(struct intr_frame* f, size_t cnt, uint32_t out[]) {
   return true;
 }
 
+static bool validate_string(const char* ustr) {
+  if (ustr == NULL) {
+    return false;
+  }
+
+  for (size_t i = 0; i < 4096; i++) {
+    char ch;
+    if (read_user_u8((uint8_t*)ustr + i, (uint8_t*)&ch) == false) {
+      return false;
+    }
+    if (ch == '\0') {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 static bool copy_in_string(char* kdst, const char* ustr, size_t max_len) {
   if (kdst == NULL || ustr == NULL) {
     return false;
@@ -136,12 +158,13 @@ static bool copy_in_string(char* kdst, const char* ustr, size_t max_len) {
   }
 
   if (ustr[max_len] == '\0') {
+    kdst[max_len] = '\0';
     return true;
   }
   return false;
 }
 
-static void syscall_handler(struct intr_frame* f UNUSED) {
+static void syscall_handler(struct intr_frame* f) {
   /* Note: Do NOT dereference arg[idx]! Check memory validity FIRST! */
   uint32_t* args = ((uint32_t*)f->esp);
   uint32_t arg0;
@@ -203,6 +226,33 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
 
     case SYS_HALT: {
       shutdown_power_off();
+      break;
+    }
+
+    case SYS_EXEC: {
+      const char* cmd_line = NULL;
+      if (fetch_arg_u32(f, 1, (uint32_t*)&cmd_line) == false) {
+        syscall_bad_access_exit();
+      }
+      if (validate_string(cmd_line) == false) {
+        syscall_bad_access_exit();
+      }
+      size_t len = strlen(cmd_line);
+      char* buffer = malloc(len + 1);
+      if (copy_in_string(buffer, cmd_line, len) == false) {
+        syscall_bad_access_exit();
+      }
+      f->eax = process_execute(buffer);
+      set_process_exit_status(f->eax);
+      break;
+    }
+
+    case SYS_WAIT: {
+      pid_t pid;
+      if (fetch_arg_u32(f, 1, (uint32_t*)&pid) == false) {
+        syscall_bad_access_exit();
+      }
+      f->eax = process_wait(pid);
       break;
     }
   }
