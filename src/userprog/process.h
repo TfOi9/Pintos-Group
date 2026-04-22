@@ -24,10 +24,12 @@ typedef void (*stub_fun)(pthread_fun, void*);
    of the process, which is `special`. */
 struct process {
   /* Owned by process.c. */
-  uint32_t* pagedir;          /* Page directory. */
-  char process_name[16];      /* Name of the main thread */
-  struct thread* main_thread; /* Pointer to main thread */
-  int exit_status;            /* Status exit code */
+  uint32_t* pagedir;            /* Page directory. */
+  char process_name[16];        /* Name of the main thread */
+  struct thread* main_thread;   /* Pointer to main thread */
+  int exit_status;              /* Status exit code */
+  struct list children;         /* List of child processes */
+  struct child_sync* self_sync; /* Pointer to sync struct */
 };
 
 void userprog_init(void);

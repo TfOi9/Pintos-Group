@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "list.h"
 #include "userprog/gdt.h"
 #include "userprog/pagedir.h"
 #include "userprog/tss.h"
@@ -20,11 +21,124 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 
-static struct semaphore temporary;
+// static struct semaphore temporary;
 static thread_func start_process NO_RETURN;
 static thread_func start_pthread NO_RETURN;
 static bool load(const char* file_name, void (**eip)(void), void** esp, int argc, char** argv);
 bool setup_thread(void (**eip)(void), void** esp);
+
+struct child_sync {
+  pid_t pid;                  /* Child proc's pid */
+  int exit_status;            /* Child proc's exit status */
+  bool exited;                /* Has the child proc exited */
+  bool waited;                /* Has waited before */
+  bool load_done;             /* Has the child proc finished loading */
+  bool load_success;          /* Has the child proc successfully loaded */
+  struct semaphore load_sema; /* Loading semaphore */
+  struct semaphore exit_sema; /* Waiting semaphore */
+  int ref_cnt;                /* Reference count */
+  struct lock lock;           /* Lock for concurrency */
+  struct list_elem elem;      /* List of children */
+};
+
+struct child_sync* child_sync_create(pid_t pid);
+
+void child_sync_get(struct child_sync* cs);
+
+void child_sync_put(struct child_sync* cs);
+
+void child_sync_set_load(struct child_sync* cs, bool success);
+
+void child_sync_set_exit(struct child_sync* cs, int status);
+
+struct child_sync* child_sync_find(struct process* pcb, pid_t child_pid);
+
+void process_release_children(struct process* pcb);
+
+struct child_sync* child_sync_create(pid_t pid) {
+  struct child_sync* cs = calloc(1, sizeof(struct child_sync));
+  if (cs == NULL) {
+    return NULL;
+  }
+  cs->pid = pid;
+  cs->exit_status = -1;
+  cs->ref_cnt = 1;
+  lock_init(&cs->lock);
+  sema_init(&cs->load_sema, 0);
+  sema_init(&cs->exit_sema, 0);
+  return cs;
+}
+
+void child_sync_get(struct child_sync* cs) {
+  if (cs == NULL) {
+    return;
+  }
+  lock_acquire(&cs->lock);
+  cs->ref_cnt++;
+  lock_release(&cs->lock);
+}
+
+void child_sync_put(struct child_sync* cs) {
+  if (cs == NULL) {
+    return;
+  }
+  bool need_free = false;
+  lock_acquire(&cs->lock);
+  cs->ref_cnt--;
+  if (cs->ref_cnt == 0) {
+    need_free = true;
+  }
+  lock_release(&cs->lock);
+  if (need_free) {
+    free(cs);
+  }
+}
+
+void child_sync_set_load(struct child_sync* cs, bool success) {
+  if (cs == NULL) {
+    return;
+  }
+  lock_acquire(&cs->lock);
+  cs->load_done = true;
+  cs->load_success = success;
+  lock_release(&cs->lock);
+  sema_up(&cs->load_sema);
+}
+
+void child_sync_set_exit(struct child_sync* cs, int status) {
+  if (cs == NULL) {
+    return;
+  }
+  lock_acquire(&cs->lock);
+  cs->exited = true;
+  cs->exit_status = status;
+  lock_release(&cs->lock);
+  sema_up(&cs->exit_sema);
+}
+
+struct child_sync* child_sync_find(struct process* pcb, pid_t child_pid) {
+  if (pcb == NULL) {
+    return NULL;
+  }
+  for (struct list_elem* e = list_begin(&pcb->children); e != list_end(&pcb->children);
+       e = list_next(e)) {
+    struct child_sync* cs = list_entry(e, struct child_sync, elem);
+    if (cs->pid == child_pid) {
+      return cs;
+    }
+  }
+  return NULL;
+}
+
+void process_release_children(struct process* pcb) {
+  if (pcb == NULL) {
+    return;
+  }
+  while (!list_empty(&pcb->children)) {
+    struct child_sync* cs = list_entry(list_pop_front(&pcb->children), struct child_sync, elem);
+    child_sync_put(cs);
+  }
+}
 
 /* Initializes user programs in the system by ensuring the main
    thread has a minimal PCB so that it can execute and wait for
@@ -44,6 +158,12 @@ void userprog_init(void) {
 
   /* Kill the kernel if we did not succeed */
   ASSERT(success);
+
+  t->pcb->main_thread = t;
+  t->pcb->exit_status = -1;
+  t->pcb->self_sync = NULL;
+  strlcpy(t->pcb->process_name, t->name, sizeof t->pcb->process_name);
+  list_init(&t->pcb->children);
 }
 
 /* Argument structure for passing args */
@@ -70,8 +190,6 @@ pid_t process_execute(const char* file_name) {
   char* fn_copy;
   tid_t tid;
 
-  sema_init(&temporary, 0);
-
   /* Alloc memory for storing arguments */
   struct process_args* args = malloc(sizeof(struct process_args));
   if (args == NULL) {
@@ -87,29 +205,56 @@ pid_t process_execute(const char* file_name) {
   }
   strlcpy(fn_copy, file_name, PGSIZE);
 
-  /* Parse all the args */
-  args->argv[0] = fn_copy;
-  args->argc = 1;
-
-  char* ptr = fn_copy;
-  while (*ptr != '\0') {
-    if (*ptr == ' ') {
-      *ptr = '\0';
-      if (*(ptr + 1) != '\0' && *(ptr + 1) != ' ') {
-        args->argv[args->argc] = ptr + 1;
-        args->argc++;
-      }
+  /* Parse all args and reserve 2 slots: one for sync payload and one NULL. */
+  args->argc = 0;
+  char* save_ptr = NULL;
+  for (char* token = strtok_r(fn_copy, " ", &save_ptr); token != NULL;
+       token = strtok_r(NULL, " ", &save_ptr)) {
+    if (args->argc >= 126) {
+      palloc_free_page(fn_copy);
+      free(args);
+      return TID_ERROR;
     }
-    ptr++;
+    args->argv[args->argc++] = token;
   }
+
+  if (args->argc == 0) {
+    palloc_free_page(fn_copy);
+    free(args);
+    return TID_ERROR;
+  }
+
+  struct child_sync* cs = child_sync_create(0);
+  if (cs == NULL) {
+    palloc_free_page(fn_copy);
+    free(args);
+    return TID_ERROR;
+  }
+
+  /* Parent list owns one ref, child thread owns one ref. */
+  child_sync_get(cs);
+  args->argv[args->argc++] = (char*)cs;
   args->argv[args->argc] = NULL;
 
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create(args->argv[0], PRI_DEFAULT, start_process, args);
   if (tid == TID_ERROR) {
+    child_sync_put(cs);
+    child_sync_put(cs);
     palloc_free_page(fn_copy);
     free(args);
+    return TID_ERROR;
   }
+
+  cs->pid = tid;
+  list_push_front(&thread_current()->pcb->children, &cs->elem);
+  sema_down(&cs->load_sema);
+  if (cs->load_success == false) {
+    list_remove(&cs->elem);
+    child_sync_put(cs);
+    return TID_ERROR;
+  }
+
   return tid;
 }
 
@@ -118,19 +263,27 @@ pid_t process_execute(const char* file_name) {
 static void start_process(void* args_) {
   struct process_args* args = (struct process_args*)args_;
   char* file_name = (char*)args->argv[0];
+  struct child_sync* cs = (struct child_sync*)args->argv[args->argc - 1];
+  args->argc--;
+  args->argv[args->argc] = NULL;
   struct thread* t = thread_current();
   struct intr_frame if_;
-  bool success, pcb_success;
+  bool success;
 
   /* Allocate process control block */
   struct process* new_pcb = malloc(sizeof(struct process));
-  success = pcb_success = new_pcb != NULL;
+  success = new_pcb != NULL;
 
   /* Initialize process control block */
   if (success) {
     // Ensure that timer_interrupt() -> schedule() -> process_activate()
     // does not try to activate our uninitialized pagedir
     new_pcb->pagedir = NULL;
+    new_pcb->main_thread = thread_current();
+    new_pcb->exit_status = -1;
+    list_init(&new_pcb->children);
+    new_pcb->self_sync = cs;
+
     t->pcb = new_pcb;
 
     // Continue initializing the PCB as normal
@@ -147,22 +300,16 @@ static void start_process(void* args_) {
     success = load(file_name, &if_.eip, &if_.esp, args->argc, args->argv);
   }
 
-  /* Handle failure with succesful PCB malloc. Must free the PCB */
-  if (!success && pcb_success) {
-    // Avoid race where PCB is freed before t->pcb is set to NULL
-    // If this happens, then an unfortuantely timed timer interrupt
-    // can try to activate the pagedir, but it is now freed memory
-    struct process* pcb_to_free = t->pcb;
-    t->pcb = NULL;
-    free(pcb_to_free);
-  }
+  /* Always wake parent waiting in process_execute(). */
+  child_sync_set_load(cs, success);
 
   /* Clean up. Exit on failure or jump to userspace */
   palloc_free_page(file_name);
   free(args);
   if (!success) {
-    sema_up(&temporary);
-    thread_exit();
+    set_process_exit_status(-1);
+    process_exit();
+    // thread_exit();
   }
 
   /* Start the user process by simulating a return from an
@@ -184,9 +331,32 @@ static void start_process(void* args_) {
 
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
-int process_wait(pid_t child_pid UNUSED) {
-  sema_down(&temporary);
-  return 0;
+int process_wait(pid_t child_pid) {
+  struct thread* cur = thread_current();
+  struct child_sync* cs = child_sync_find(cur->pcb, child_pid);
+  if (cs == NULL) {
+    return -1;
+  }
+
+  bool has_exited = false;
+  lock_acquire(&cs->lock);
+  if (cs->waited == true) {
+    lock_release(&cs->lock);
+    return -1;
+  }
+  cs->waited = true;
+  has_exited = cs->exited;
+  lock_release(&cs->lock);
+
+  if (!has_exited) {
+    sema_down(&cs->exit_sema);
+  }
+
+  int local_status = cs->exit_status;
+  list_remove(&cs->elem);
+  child_sync_put(cs);
+
+  return local_status;
 }
 
 /* Free the current process's resources. */
@@ -219,6 +389,14 @@ void process_exit(void) {
   /* Output the process's exit status */
   printf("%s: exit(%d)\n", cur->pcb->process_name, cur->pcb->exit_status);
 
+  if (cur->pcb->self_sync != NULL) {
+    child_sync_set_exit(cur->pcb->self_sync, cur->pcb->exit_status);
+    child_sync_put(cur->pcb->self_sync);
+    cur->pcb->self_sync = NULL;
+  }
+
+  process_release_children(cur->pcb);
+
   /* Free the PCB of this process and kill this thread
      Avoid race where PCB is freed before t->pcb is set to NULL
      If this happens, then an unfortuantely timed timer interrupt
@@ -227,7 +405,6 @@ void process_exit(void) {
   cur->pcb = NULL;
   free(pcb_to_free);
 
-  sema_up(&temporary);
   thread_exit();
 }
 
