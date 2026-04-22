@@ -216,6 +216,9 @@ void process_exit(void) {
     pagedir_destroy(pd);
   }
 
+  /* Output the process's exit status */
+  printf("%s: exit(%d)\n", cur->pcb->process_name, cur->pcb->exit_status);
+
   /* Free the PCB of this process and kill this thread
      Avoid race where PCB is freed before t->pcb is set to NULL
      If this happens, then an unfortuantely timed timer interrupt
@@ -226,6 +229,17 @@ void process_exit(void) {
 
   sema_up(&temporary);
   thread_exit();
+}
+
+/* Sets the current process's exit status */
+void set_process_exit_status(int status) {
+  struct thread* cur = thread_current();
+
+  if (cur->pcb == NULL) {
+    return;
+  }
+
+  cur->pcb->exit_status = status;
 }
 
 /* Sets up the CPU for running user code in the current

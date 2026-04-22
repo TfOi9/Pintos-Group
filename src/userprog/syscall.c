@@ -27,12 +27,7 @@ static void syscall_handler(struct intr_frame*);
 void syscall_init(void) { intr_register_int(0x30, 3, INTR_ON, syscall_handler, "syscall"); }
 
 static void syscall_bad_access_exit(void) {
-  struct thread* cur = thread_current();
-
-  ASSERT(cur->pcb != NULL);
-  cur->pcb->exit_status = -1;
-  printf("%s: exit(%d)\n", cur->pcb->process_name, cur->pcb->exit_status);
-
+  set_process_exit_status(-1);
   process_exit();
   NOT_REACHED();
 }
@@ -146,6 +141,7 @@ static bool copy_in_string(char* kdst, const char* ustr, size_t max_len) {
 }
 
 static void syscall_handler(struct intr_frame* f UNUSED) {
+  /* Note: Do NOT dereference arg[idx]! Check memory validity FIRST! */
   uint32_t* args = ((uint32_t*)f->esp);
   uint32_t arg0;
   if (fetch_arg_u32(f, 0, &arg0) == false) {
@@ -161,7 +157,7 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
 
   /* printf("System call number: %d\n", arg0); */
 
-  switch (args[0]) {
+  switch (arg0) {
     case SYS_WRITE: {
       int fd;
       if (fetch_arg_u32(f, 1, (uint32_t*)&fd) == false) {
@@ -189,7 +185,7 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
       if (fetch_arg_u32(f, 1, &(f->eax)) == false) {
         syscall_bad_access_exit();
       }
-      printf("%s: exit(%d)\n", thread_current()->pcb->process_name, args[1]);
+      set_process_exit_status(f->eax);
       process_exit();
       break;
   }
