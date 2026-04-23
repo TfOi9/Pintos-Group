@@ -3,6 +3,7 @@
 #include <string.h>
 #include <syscall-nr.h>
 #include "lib/kernel/stdio.h"
+#include "list.h"
 #include "pagedir.h"
 #include "threads/interrupt.h"
 #include "threads/malloc.h"
@@ -27,9 +28,18 @@ static bool validate_string(const char* ustr);
 
 static bool copy_in_string(char* kdst, const char* ustr, size_t max_len);
 
+static bool validate_user_buffer(const void* uaddr, size_t size);
+
+static bool copy_in_buffer(void* kdst, const void* usrc, size_t size);
+
+static bool copy_out_buffer(void* udst, const void* ksrc, size_t size);
+
 static void syscall_handler(struct intr_frame*);
 
-void syscall_init(void) { intr_register_int(0x30, 3, INTR_ON, syscall_handler, "syscall"); }
+void syscall_init(void) {
+  lock_init(&filesys_lock);
+  intr_register_int(0x30, 3, INTR_ON, syscall_handler, "syscall");
+}
 
 static void syscall_bad_access_exit(void) {
   set_process_exit_status(-1);
@@ -163,6 +173,47 @@ static bool copy_in_string(char* kdst, const char* ustr, size_t max_len) {
   }
   return false;
 }
+
+static bool validate_user_buffer(const void* uaddr, size_t size) {
+  if (uaddr == NULL) {
+    return false;
+  }
+  for (size_t i = 0; i < size; i++) {
+    if (!validate_user_uaddr(uaddr)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool copy_in_buffer(void* kdst, const void* usrc, size_t size) {
+  if (kdst == NULL || usrc == NULL) {
+    return false;
+  }
+  uint8_t out_u8;
+  for (size_t i = 0; i < size; i++) {
+    if (!read_user_u8((uint8_t*)usrc + i, &out_u8)) {
+      return false;
+    }
+    *((uint8_t*)kdst + i) = out_u8;
+  }
+  return true;
+}
+
+static bool copy_out_buffer(void* udst, const void* ksrc, size_t size) {
+  if (udst == NULL || ksrc == NULL) {
+    return false;
+  }
+  for (size_t i = 0; i < size; i++) {
+    if (!validate_user_uaddr((uint8_t*)udst + i)) {
+      return false;
+    }
+    *((uint8_t*)udst + i) = *((uint8_t*)ksrc + i);
+  }
+  return true;
+}
+
+struct lock filesys_lock;
 
 static void syscall_handler(struct intr_frame* f) {
   /* Note: Do NOT dereference arg[idx]! Check memory validity FIRST! */

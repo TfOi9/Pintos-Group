@@ -163,8 +163,11 @@ void userprog_init(void) {
   t->pcb->main_thread = t;
   t->pcb->exit_status = -1;
   t->pcb->self_sync = NULL;
+  t->pcb->next_fd = 2;
+
   strlcpy(t->pcb->process_name, t->name, sizeof t->pcb->process_name);
   list_init(&t->pcb->children);
+  list_init(&t->pcb->fd_list);
 }
 
 /* Argument structure for passing args */
@@ -274,7 +277,9 @@ static void start_fork(void* args_) {
   child_pcb->pagedir = NULL;
   child_pcb->main_thread = t;
   child_pcb->exit_status = -1;
+  child_pcb->next_fd = 2;
   list_init(&child_pcb->children);
+  list_init(&child_pcb->fd_list);
   child_pcb->self_sync = cs;
   strlcpy(child_pcb->process_name, args->child_name, sizeof(child_pcb->process_name));
 
@@ -402,7 +407,9 @@ static void start_process(void* args_) {
     new_pcb->pagedir = NULL;
     new_pcb->main_thread = thread_current();
     new_pcb->exit_status = -1;
+    new_pcb->next_fd = 2;
     list_init(&new_pcb->children);
+    list_init(&new_pcb->fd_list);
     new_pcb->self_sync = cs;
 
     t->pcb = new_pcb;
@@ -517,6 +524,8 @@ void process_exit(void) {
   }
 
   process_release_children(cur->pcb);
+
+  fd_close_all(cur->pcb);
 
   /* Free the PCB of this process and kill this thread
      Avoid race where PCB is freed before t->pcb is set to NULL
@@ -646,6 +655,7 @@ bool load(const char* file_name, void (**eip)(void), void** esp, int argc, char*
     printf("load: %s: open failed\n", file_name);
     goto done;
   }
+  t->pcb->exec_file = file;
 
   /* Read and verify executable header. */
   if (file_read(file, &ehdr, sizeof ehdr) != sizeof ehdr ||
@@ -954,3 +964,86 @@ void pthread_exit(void) {}
    This function will be implemented in Project 2: Multithreading. For
    now, it does nothing. */
 void pthread_exit_main(void) {}
+
+struct file_handle* file_handle_create(struct file* file) {
+  struct file_handle* handle = calloc(1, sizeof(struct file_handle));
+  if (!handle) {
+    return NULL;
+  }
+  handle->file = file;
+  handle->ref_cnt = 1;
+  lock_init(&handle->lock);
+  return handle;
+}
+
+void file_handle_get(struct file_handle* handle) {
+  if (handle == NULL) {
+    return;
+  }
+  lock_acquire(&handle->lock);
+  handle->ref_cnt++;
+  lock_release(&handle->lock);
+}
+
+void file_handle_put(struct file_handle* handle) {
+  if (handle == NULL) {
+    return;
+  }
+  bool destroyed = false;
+  lock_acquire(&handle->lock);
+  handle->ref_cnt--;
+  if (handle->ref_cnt == 0) {
+    destroyed = true;
+  }
+  lock_release(&handle->lock);
+  if (destroyed) {
+    file_close(handle->file);
+    free(handle);
+  }
+}
+
+struct fd_entry* fd_lookup(struct process* pcb, int fd) {
+  for (struct list_elem* e = list_begin(&pcb->fd_list); e != list_end(&pcb->fd_list);
+       e = list_next(e)) {
+    struct fd_entry* fde = list_entry(e, struct fd_entry, elem);
+    if (fde->fd == fd) {
+      return fde;
+    }
+  }
+  return NULL;
+}
+
+int fd_install(struct process* pcb, struct file* file) {
+  struct fd_entry* entry = calloc(1, sizeof(struct fd_entry));
+  if (entry == NULL) {
+    return -1;
+  }
+  entry->handle = file_handle_create(file);
+  if (entry->handle == NULL) {
+    free(entry);
+    return -1;
+  }
+  entry->fd = pcb->next_fd++;
+  list_push_back(&pcb->fd_list, &entry->elem);
+  return entry->fd;
+}
+
+void fd_close(struct process* pcb, int fd) {
+  struct fd_entry* entry = fd_lookup(pcb, fd);
+  if (entry == NULL) {
+    return;
+  }
+  struct file_handle* handle = entry->handle;
+  list_remove(&entry->elem);
+  file_handle_put(entry->handle);
+  free(entry);
+}
+
+void fd_close_all(struct process* pcb) {
+  while (!list_empty(&pcb->fd_list)) {
+    struct list_elem* e = list_pop_front(&pcb->fd_list);
+    struct fd_entry* entry = list_entry(e, struct fd_entry, elem);
+    file_handle_put(entry->handle);
+    free(entry);
+  }
+}
