@@ -232,7 +232,7 @@ bool clone_pagedir(struct process* child_pcb, struct process* parent_pcb) {
   }
 
   uint32_t* parent_pd = parent_pcb->pagedir;
-  uint32_t* child_pd = parent_pcb->pagedir;
+  uint32_t* child_pd = child_pcb->pagedir;
   uint32_t* pde;
 
   ASSERT(parent_pd != NULL);
@@ -249,8 +249,8 @@ bool clone_pagedir(struct process* child_pcb, struct process* parent_pcb) {
       for (pte = parent_pt; pte < parent_pt + PGSIZE / sizeof(*pte); pte++) {
         if (*pte & PTE_P) {
           /* Calculate the user's virtual address */
-          void* upage = ptov(((uintptr_t)(pde - parent_pd) << PDSHIFT) |
-                             ((uintptr_t)(pte - parent_pt) << PTSHIFT));
+          void* upage = (void*)(((uintptr_t)(pde - parent_pd) << PDSHIFT) |
+                                ((uintptr_t)(pte - parent_pt) << PTSHIFT));
           /* Clone a single user page */
           if (!clone_user_page(child_pd, parent_pd, upage)) {
             return false;

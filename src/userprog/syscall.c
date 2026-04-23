@@ -255,5 +255,10 @@ static void syscall_handler(struct intr_frame* f) {
       f->eax = process_wait(pid);
       break;
     }
+
+    case SYS_FORK: {
+      f->eax = process_fork(f);
+      break;
+    }
   }
 }

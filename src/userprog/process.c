@@ -302,10 +302,12 @@ static void start_fork(void* args_) {
 done:
   /* Notice the parent process */
   child_sync_set_load(cs, success);
-  child_sync_put(cs);
   free(args);
 
   if (!success) {
+    /* Child failed before reaching userspace: drop the child-owned ref. */
+    child_sync_put(cs);
+
     /* Clone failed, cleanup and quit */
     if (child_pcb != NULL) {
       if (child_pcb->pagedir != NULL) {
@@ -346,8 +348,8 @@ pid_t process_fork(struct intr_frame* parent_if) {
   args->cs = cs;
   args->parent_pcb = cur->pcb;
 
-  /* Setup the child process's name */
-  snprintf(args->child_name, sizeof(args->child_name), "%s fork", cur->pcb->process_name);
+  /* Child keeps the same process name as the parent process. */
+  strlcpy(args->child_name, cur->pcb->process_name, sizeof(args->child_name));
 
   /* Reserve a child sync reference for the child thread */
   child_sync_get(cs);
