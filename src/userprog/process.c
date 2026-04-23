@@ -847,37 +847,44 @@ static bool setup_stack(void** esp, int argc, char** argv) {
     return false;
   }
 
-  uint32_t* stack_ptr = (uint32_t*)PHYS_BASE;
+  uint8_t* stack_ptr = (uint8_t*)PHYS_BASE;
   char* argv_addrs[128];
 
   // Push argument strings into stack
   for (int i = argc - 1; i >= 0; i--) {
     size_t len = strlen(argv[i]) + 1;
-    stack_ptr = (uint32_t*)((uint8_t*)stack_ptr - len);
+    stack_ptr -= len;
     memcpy(stack_ptr, argv[i], len);
     argv_addrs[i] = (char*)stack_ptr;
   }
 
-  // Align to 16-char boundary
-  stack_ptr = (uint32_t*)((uint32_t)stack_ptr & ~0xf);
+  /*
+   * Keep i386 SysV call alignment: at _start entry, esp % 16 == 12.
+   * Account for metadata that will be pushed after this padding:
+   * NULL, argv[argc], argv pointer, argc, and fake return address.
+   */
+  size_t metadata_bytes = (size_t)(argc + 4) * sizeof(uint32_t);
+  size_t pad = ((uintptr_t)stack_ptr - metadata_bytes - 12u) & 0xfu;
+  stack_ptr -= pad;
 
   // Push argv pointer array into stack
-  *--stack_ptr = 0;
+  uint32_t* stack_words = (uint32_t*)stack_ptr;
+  *--stack_words = 0;
   for (int i = argc - 1; i >= 0; i--) {
-    *--stack_ptr = (uint32_t)argv_addrs[i];
+    *--stack_words = (uint32_t)argv_addrs[i];
   }
 
   // Push argv pointer
-  uint32_t argv_ptr = (uint32_t)stack_ptr;
-  *--stack_ptr = argv_ptr;
+  uint32_t argv_ptr = (uint32_t)stack_words;
+  *--stack_words = argv_ptr;
 
   // Push argc
-  *--stack_ptr = argc;
+  *--stack_words = argc;
 
-  *--stack_ptr = 0;
+  *--stack_words = 0;
 
   // Set initial pointer
-  *esp = stack_ptr;
+  *esp = stack_words;
 
   return true;
 }
