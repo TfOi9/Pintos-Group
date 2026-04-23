@@ -2,11 +2,14 @@
 #include <stdio.h>
 #include <string.h>
 #include <syscall-nr.h>
+#include "filesys/file.h"
+#include "filesys/filesys.h"
 #include "lib/kernel/stdio.h"
 #include "list.h"
 #include "pagedir.h"
 #include "threads/interrupt.h"
 #include "threads/malloc.h"
+#include "threads/synch.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "userprog/process.h"
@@ -290,10 +293,14 @@ static void syscall_handler(struct intr_frame* f) {
       }
       size_t len = strlen(cmd_line);
       char* buffer = malloc(len + 1);
+      if (buffer == NULL) {
+        syscall_bad_access_exit();
+      }
       if (copy_in_string(buffer, cmd_line, len) == false) {
         syscall_bad_access_exit();
       }
       f->eax = process_execute(buffer);
+      free(buffer);
       set_process_exit_status(f->eax);
       break;
     }
@@ -310,6 +317,101 @@ static void syscall_handler(struct intr_frame* f) {
     case SYS_FORK: {
       f->eax = process_fork(f);
       break;
+    }
+
+    case SYS_CREATE: {
+      const char* file_name = NULL;
+      if (fetch_arg_u32(f, 1, (uint32_t*)&file_name) == false) {
+        syscall_bad_access_exit();
+      }
+      unsigned initial_size = 0;
+      if (fetch_arg_u32(f, 2, &initial_size) == false) {
+        syscall_bad_access_exit();
+      }
+      if (validate_string(file_name) == false) {
+        syscall_bad_access_exit();
+      }
+      size_t len = strlen(file_name);
+      char* buffer = malloc(len + 1);
+      if (buffer == NULL) {
+        syscall_bad_access_exit();
+      }
+      if (copy_in_string(buffer, file_name, len) == false) {
+        syscall_bad_access_exit();
+      }
+      bool success = false;
+      lock_acquire(&filesys_lock);
+      success = filesys_create(buffer, initial_size);
+      lock_release(&filesys_lock);
+      f->eax = success;
+      free(buffer);
+      set_process_exit_status(f->eax);
+      break;
+    }
+
+    case SYS_REMOVE: {
+      const char* file_name = NULL;
+      if (fetch_arg_u32(f, 1, (uint32_t*)&file_name) == false) {
+        syscall_bad_access_exit();
+      }
+      if (validate_string(file_name) == false) {
+        syscall_bad_access_exit();
+      }
+      size_t len = strlen(file_name);
+      char* buffer = malloc(len + 1);
+      if (buffer == NULL) {
+        syscall_bad_access_exit();
+      }
+      if (copy_in_string(buffer, file_name, len) == false) {
+        syscall_bad_access_exit();
+      }
+      bool success = false;
+      lock_acquire(&filesys_lock);
+      success = filesys_remove(buffer);
+      lock_release(&filesys_lock);
+      f->eax = success;
+      free(buffer);
+      set_process_exit_status(f->eax);
+      break;
+    }
+
+    case SYS_OPEN: {
+      const char* file_name = NULL;
+      if (fetch_arg_u32(f, 1, (uint32_t*)&file_name) == false) {
+        syscall_bad_access_exit();
+      }
+      if (validate_string(file_name) == false) {
+        syscall_bad_access_exit();
+      }
+      size_t len = strlen(file_name);
+      char* buffer = malloc(len + 1);
+      if (buffer == NULL) {
+        syscall_bad_access_exit();
+      }
+      if (copy_in_string(buffer, file_name, len) == false) {
+        syscall_bad_access_exit();
+      }
+      struct file* file = NULL;
+      lock_acquire(&filesys_lock);
+      file = filesys_open(buffer);
+      lock_release(&filesys_lock);
+      if (file == NULL) {
+        free(buffer);
+        f->eax = -1;
+        set_process_exit_status(-1);
+        break;
+      }
+      int fd = fd_install(thread_current()->pcb, file);
+      if (fd == -1) {
+        free(buffer);
+        file_close(file);
+        f->eax = -1;
+        set_process_exit_status(-1);
+        break;
+      }
+      free(buffer);
+      f->eax = fd;
+      set_process_exit_status(fd);
     }
   }
 }
