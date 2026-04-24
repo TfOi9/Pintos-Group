@@ -9,6 +9,7 @@
 #include "list.h"
 #include "pagedir.h"
 #include "stdint.h"
+#include "syscall.h"
 #include "threads/interrupt.h"
 #include "threads/malloc.h"
 #include "threads/synch.h"
@@ -255,8 +256,39 @@ static void syscall_handler(struct intr_frame* f) {
       if (fd == STDOUT_FILENO) {
         putbuf(buffer, size);
         f->eax = (int)size;
-      } else {
+      } else if (fd == STDIN_FILENO) {
         f->eax = -1;
+        set_process_exit_status(-1);
+        break;
+      } else {
+        struct fd_entry* entry = fd_lookup(thread_current()->pcb, fd);
+        if (entry == NULL) {
+          f->eax = -1;
+          set_process_exit_status(-1);
+          break;
+        }
+        int total = 0;
+        char bounce[256];
+        lock_acquire(&filesys_lock);
+        while (total < size) {
+          int chunk = size - total;
+          if (chunk > 256) {
+            chunk = 256;
+          }
+          if (copy_in_buffer(bounce, buffer + total, chunk) == false) {
+            lock_release(&filesys_lock);
+            syscall_bad_access_exit();
+          }
+          int char_written = file_write(entry->handle->file, bounce, chunk);
+          total += char_written;
+          if (char_written < chunk) {
+            break;
+          }
+        }
+        lock_release(&filesys_lock);
+        f->eax = total;
+        set_process_exit_status(total);
+        break;
       }
       break;
     }
