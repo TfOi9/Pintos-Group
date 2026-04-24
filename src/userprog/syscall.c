@@ -2,11 +2,13 @@
 #include <stdio.h>
 #include <string.h>
 #include <syscall-nr.h>
+#include "devices/input.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
 #include "lib/kernel/stdio.h"
 #include "list.h"
 #include "pagedir.h"
+#include "stdint.h"
 #include "threads/interrupt.h"
 #include "threads/malloc.h"
 #include "threads/synch.h"
@@ -412,6 +414,109 @@ static void syscall_handler(struct intr_frame* f) {
       free(buffer);
       f->eax = fd;
       set_process_exit_status(fd);
+      break;
+    }
+
+    case SYS_FILESIZE: {
+      int fd = -1;
+      if (fetch_arg_u32(f, 1, (uint32_t*)&fd) == false) {
+        syscall_bad_access_exit();
+      }
+      struct fd_entry* entry = fd_lookup(thread_current()->pcb, fd);
+      if (entry == NULL) {
+        f->eax = -1;
+        set_process_exit_status(-1);
+        break;
+      }
+      size_t filesize = 0;
+      lock_acquire(&filesys_lock);
+      filesize = file_length(entry->handle->file);
+      lock_release(&filesys_lock);
+      f->eax = filesize;
+      set_process_exit_status(filesize);
+      break;
+    }
+
+    case SYS_READ: {
+      int fd = -1;
+      void* buffer = NULL;
+      unsigned size = 0;
+      if (fetch_arg_u32(f, 1, (uint32_t*)&fd) == false) {
+        syscall_bad_access_exit();
+      }
+      if (fetch_arg_u32(f, 2, (uint32_t*)&buffer) == false) {
+        syscall_bad_access_exit();
+      }
+      if (fetch_arg_u32(f, 3, (uint32_t*)&size) == false) {
+        syscall_bad_access_exit();
+      }
+      if (fd == 0) {
+        char ch = 0;
+        int total = 0;
+        while (total < size) {
+          int c = input_getc();
+          if (c < 0) {
+            break;
+          }
+          ch = (char)c;
+          if (copy_out_buffer(buffer + total, &ch, 1) == false) {
+            syscall_bad_access_exit();
+          }
+          total++;
+        }
+        f->eax = total;
+        set_process_exit_status(total);
+        break;
+      } else if (fd >= 2) {
+        struct fd_entry* entry = fd_lookup(thread_current()->pcb, fd);
+        if (entry == NULL) {
+          f->eax = -1;
+          set_process_exit_status(-1);
+          break;
+        }
+        if (validate_user_buffer(buffer, size) == false) {
+          syscall_bad_access_exit();
+        }
+        char bounce[256];
+        int total = 0;
+        bool bad = false;
+        lock_acquire(&filesys_lock);
+        while (total < size) {
+          int chunk = size - total;
+          if (chunk > 256)
+            chunk = 256;
+          int char_read = file_read(entry->handle->file, bounce, chunk);
+          if (char_read < 0) {
+            f->eax = -1;
+            set_process_exit_status(-1);
+            bad = true;
+            break;
+          } else if (char_read == 0) {
+            break;
+          } else {
+            if (copy_out_buffer(buffer + total, bounce, char_read) == false) {
+              lock_release(&filesys_lock);
+              syscall_bad_access_exit();
+            }
+            total += char_read;
+            if (char_read < chunk) {
+              break;
+            }
+          }
+        }
+        lock_release(&filesys_lock);
+        if (bad) {
+          break;
+        }
+        f->eax = total;
+        set_process_exit_status(total);
+        break;
+      } else {
+        f->eax = -1;
+        set_process_exit_status(-1);
+        break;
+      }
+      break;
     }
   }
 }
