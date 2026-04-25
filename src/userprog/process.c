@@ -7,6 +7,7 @@
 #include <string.h>
 #include "list.h"
 #include "pagedir.h"
+#include "syscall.h"
 #include "userprog/gdt.h"
 #include "userprog/pagedir.h"
 #include "userprog/tss.h"
@@ -164,6 +165,7 @@ void userprog_init(void) {
   t->pcb->exit_status = -1;
   t->pcb->self_sync = NULL;
   t->pcb->next_fd = 2;
+  t->pcb->exec_file = NULL;
 
   strlcpy(t->pcb->process_name, t->name, sizeof t->pcb->process_name);
   list_init(&t->pcb->children);
@@ -281,6 +283,7 @@ static void start_fork(void* args_) {
   list_init(&child_pcb->children);
   list_init(&child_pcb->fd_list);
   child_pcb->self_sync = cs;
+  child_pcb->exec_file = NULL;
   strlcpy(child_pcb->process_name, args->child_name, sizeof(child_pcb->process_name));
 
   t->pcb = child_pcb;
@@ -411,6 +414,7 @@ static void start_process(void* args_) {
     list_init(&new_pcb->children);
     list_init(&new_pcb->fd_list);
     new_pcb->self_sync = cs;
+    new_pcb->exec_file = NULL;
 
     t->pcb = new_pcb;
 
@@ -526,6 +530,14 @@ void process_exit(void) {
   process_release_children(cur->pcb);
 
   fd_close_all(cur->pcb);
+
+  if (cur->pcb->exec_file != NULL) {
+    lock_acquire(&filesys_lock);
+    file_allow_write(cur->pcb->exec_file);
+    file_close(cur->pcb->exec_file);
+    lock_release(&filesys_lock);
+    cur->pcb->exec_file = NULL;
+  }
 
   /* Free the PCB of this process and kill this thread
      Avoid race where PCB is freed before t->pcb is set to NULL
@@ -650,7 +662,12 @@ bool load(const char* file_name, void (**eip)(void), void** esp, int argc, char*
   process_activate();
 
   /* Open executable file. */
+  lock_acquire(&filesys_lock);
   file = filesys_open(file_name);
+  if (file != NULL) {
+    file_deny_write(file);
+  }
+  lock_release(&filesys_lock);
   if (file == NULL) {
     printf("load: %s: open failed\n", file_name);
     goto done;
@@ -726,7 +743,12 @@ bool load(const char* file_name, void (**eip)(void), void** esp, int argc, char*
 
 done:
   /* We arrive here whether the load is successful or not. */
-  file_close(file);
+  if (!success && file != NULL) {
+    lock_acquire(&filesys_lock);
+    file_close(file);
+    lock_release(&filesys_lock);
+    t->pcb->exec_file = NULL;
+  }
   return success;
 }
 
