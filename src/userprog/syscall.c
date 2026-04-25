@@ -550,5 +550,53 @@ static void syscall_handler(struct intr_frame* f) {
       }
       break;
     }
+
+    case SYS_SEEK: {
+      int fd;
+      unsigned position;
+      if (fetch_arg_u32(f, 1, (uint32_t*)&fd) == false) {
+        syscall_bad_access_exit();
+      }
+      if (fetch_arg_u32(f, 2, (uint32_t*)&position) == false) {
+        syscall_bad_access_exit();
+      }
+      struct fd_entry* entry = fd_lookup(thread_current()->pcb, fd);
+      if (entry == NULL) {
+        break;
+      }
+      lock_acquire(&filesys_lock);
+      file_seek(entry->handle->file, position);
+      lock_release(&filesys_lock);
+      break;
+    }
+
+    case SYS_TELL: {
+      int fd;
+      if (fetch_arg_u32(f, 1, (uint32_t*)&fd) == false) {
+        syscall_bad_access_exit();
+      }
+      struct fd_entry* entry = fd_lookup(thread_current()->pcb, fd);
+      if (entry == NULL) {
+        f->eax = -1;
+        set_process_exit_status(-1);
+        break;
+      }
+      int position = -1;
+      lock_acquire(&filesys_lock);
+      position = file_tell(entry->handle->file);
+      lock_release(&filesys_lock);
+      f->eax = position;
+      set_process_exit_status(position);
+      break;
+    }
+
+    case SYS_CLOSE: {
+      int fd;
+      if (fetch_arg_u32(f, 1, (uint32_t*)&fd) == false) {
+        syscall_bad_access_exit();
+      }
+      fd_close(thread_current()->pcb, fd);
+      break;
+    }
   }
 }
