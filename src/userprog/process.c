@@ -279,7 +279,7 @@ static void start_fork(void* args_) {
   child_pcb->pagedir = NULL;
   child_pcb->main_thread = t;
   child_pcb->exit_status = -1;
-  child_pcb->next_fd = 2;
+  child_pcb->next_fd = parent_pcb->next_fd;
   list_init(&child_pcb->children);
   list_init(&child_pcb->fd_list);
   child_pcb->self_sync = cs;
@@ -298,7 +298,24 @@ static void start_fork(void* args_) {
   }
 
   /* Clone file discriptors */
-  /* TBD */
+  for (struct list_elem* e = list_begin(&parent_pcb->fd_list); e != list_end(&parent_pcb->fd_list);
+       e = list_next(e)) {
+    struct fd_entry* entry = list_entry(e, struct fd_entry, elem);
+    struct fd_entry* new_entry = calloc(1, sizeof(struct fd_entry));
+    if (new_entry == NULL) {
+      while (list_empty(&child_pcb->fd_list) == false) {
+        struct list_elem* del = list_pop_back(&child_pcb->fd_list);
+        struct fd_entry* del_entry = list_entry(del, struct fd_entry, elem);
+        file_handle_put(del_entry->handle);
+        free(del_entry);
+      }
+      goto done;
+    }
+    new_entry->fd = entry->fd;
+    new_entry->handle = entry->handle;
+    file_handle_get(entry->handle);
+    list_push_back(&child_pcb->fd_list, &new_entry->elem);
+  }
 
   /* Prepare the child process's interrupt frame */
   memcpy(&if_, &args->parent_if, sizeof(if_));

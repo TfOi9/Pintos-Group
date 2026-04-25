@@ -258,13 +258,11 @@ static void syscall_handler(struct intr_frame* f) {
         f->eax = (int)size;
       } else if (fd == STDIN_FILENO) {
         f->eax = -1;
-        set_process_exit_status(-1);
         break;
       } else {
         struct fd_entry* entry = fd_lookup(thread_current()->pcb, fd);
         if (entry == NULL) {
           f->eax = -1;
-          set_process_exit_status(-1);
           break;
         }
         int total = 0;
@@ -287,7 +285,6 @@ static void syscall_handler(struct intr_frame* f) {
         }
         lock_release(&filesys_lock);
         f->eax = total;
-        set_process_exit_status(total);
         break;
       }
       break;
@@ -308,7 +305,6 @@ static void syscall_handler(struct intr_frame* f) {
         syscall_bad_access_exit();
       }
       f->eax = i + 1;
-      set_process_exit_status(0);
       break;
     }
 
@@ -335,7 +331,6 @@ static void syscall_handler(struct intr_frame* f) {
       }
       f->eax = process_execute(buffer);
       free(buffer);
-      set_process_exit_status(f->eax);
       break;
     }
 
@@ -379,7 +374,6 @@ static void syscall_handler(struct intr_frame* f) {
       lock_release(&filesys_lock);
       f->eax = success;
       free(buffer);
-      set_process_exit_status(f->eax);
       break;
     }
 
@@ -405,7 +399,6 @@ static void syscall_handler(struct intr_frame* f) {
       lock_release(&filesys_lock);
       f->eax = success;
       free(buffer);
-      set_process_exit_status(f->eax);
       break;
     }
 
@@ -432,7 +425,6 @@ static void syscall_handler(struct intr_frame* f) {
       if (file == NULL) {
         free(buffer);
         f->eax = -1;
-        set_process_exit_status(-1);
         break;
       }
       int fd = fd_install(thread_current()->pcb, file);
@@ -440,12 +432,10 @@ static void syscall_handler(struct intr_frame* f) {
         free(buffer);
         file_close(file);
         f->eax = -1;
-        set_process_exit_status(-1);
         break;
       }
       free(buffer);
       f->eax = fd;
-      set_process_exit_status(fd);
       break;
     }
 
@@ -457,7 +447,6 @@ static void syscall_handler(struct intr_frame* f) {
       struct fd_entry* entry = fd_lookup(thread_current()->pcb, fd);
       if (entry == NULL) {
         f->eax = -1;
-        set_process_exit_status(-1);
         break;
       }
       size_t filesize = 0;
@@ -465,7 +454,6 @@ static void syscall_handler(struct intr_frame* f) {
       filesize = file_length(entry->handle->file);
       lock_release(&filesys_lock);
       f->eax = filesize;
-      set_process_exit_status(filesize);
       break;
     }
 
@@ -497,13 +485,11 @@ static void syscall_handler(struct intr_frame* f) {
           total++;
         }
         f->eax = total;
-        set_process_exit_status(total);
         break;
       } else if (fd >= 2) {
         struct fd_entry* entry = fd_lookup(thread_current()->pcb, fd);
         if (entry == NULL) {
           f->eax = -1;
-          set_process_exit_status(-1);
           break;
         }
         if (validate_user_buffer(buffer, size) == false) {
@@ -520,7 +506,6 @@ static void syscall_handler(struct intr_frame* f) {
           int char_read = file_read(entry->handle->file, bounce, chunk);
           if (char_read < 0) {
             f->eax = -1;
-            set_process_exit_status(-1);
             bad = true;
             break;
           } else if (char_read == 0) {
@@ -541,11 +526,9 @@ static void syscall_handler(struct intr_frame* f) {
           break;
         }
         f->eax = total;
-        set_process_exit_status(total);
         break;
       } else {
         f->eax = -1;
-        set_process_exit_status(-1);
         break;
       }
       break;
@@ -578,7 +561,6 @@ static void syscall_handler(struct intr_frame* f) {
       struct fd_entry* entry = fd_lookup(thread_current()->pcb, fd);
       if (entry == NULL) {
         f->eax = -1;
-        set_process_exit_status(-1);
         break;
       }
       int position = -1;
@@ -586,7 +568,6 @@ static void syscall_handler(struct intr_frame* f) {
       position = file_tell(entry->handle->file);
       lock_release(&filesys_lock);
       f->eax = position;
-      set_process_exit_status(position);
       break;
     }
 
