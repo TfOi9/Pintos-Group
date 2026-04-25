@@ -77,8 +77,6 @@ static struct thread* thread_schedule_fair(void);
 static struct thread* thread_schedule_mlfqs(void);
 static struct thread* thread_schedule_reserved(void);
 
-static void thread_try_preempt(void);
-
 /* Determines which scheduler the kernel should use.
    Controlled by the kernel command-line options
     "-sched=fifo", "-sched=prio",
@@ -503,7 +501,7 @@ static struct thread* thread_schedule_reserved(void) {
 }
 
 /* Check and try to preempt the CPU from the current thread */
-static void thread_try_preempt(void) {
+void thread_try_preempt(void) {
   if (active_sched_policy != SCHED_PRIO) {
     return;
   }
@@ -624,4 +622,11 @@ bool thread_priority_greater(const struct list_elem* a, const struct list_elem* 
   struct thread* thr_a = list_entry(a, struct thread, elem);
   struct thread* thr_b = list_entry(b, struct thread, elem);
   return thr_a->priority > thr_b->priority;
+}
+
+/* Condition comparator by priority. */
+bool cond_priority_greater(const struct list_elem* a, const struct list_elem* b, void* aux) {
+  struct semaphore_elem* sema_a = list_entry(a, struct semaphore_elem, elem);
+  struct semaphore_elem* sema_b = list_entry(b, struct semaphore_elem, elem);
+  return sema_a->priority > sema_b->priority;
 }

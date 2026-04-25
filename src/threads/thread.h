@@ -155,7 +155,10 @@ void thread_set_nice(int);
 int thread_get_recent_cpu(void);
 int thread_get_load_avg(void);
 
+void thread_try_preempt(void);
+
 bool wake_up_less(const struct list_elem* a, const struct list_elem* b, void* aux);
 bool thread_priority_greater(const struct list_elem* a, const struct list_elem* b, void* aux);
+bool cond_priority_greater(const struct list_elem* a, const struct list_elem* b, void* aux);
 
 #endif /* threads/thread.h */
