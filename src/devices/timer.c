@@ -4,6 +4,7 @@
 #include <round.h>
 #include <stdio.h>
 #include "devices/pit.h"
+#include "list.h"
 #include "threads/interrupt.h"
 #include "threads/synch.h"
 #include "threads/thread.h"
@@ -76,11 +77,20 @@ int64_t timer_elapsed(int64_t then) { return timer_ticks() - then; }
 /* Sleeps for approximately TICKS timer ticks.  Interrupts must
    be turned on. */
 void timer_sleep(int64_t ticks) {
-  int64_t start = timer_ticks();
+  /* Stop clock interrupts to ensure atomic operation */
+  enum intr_level old_level = intr_disable();
 
-  ASSERT(intr_get_level() == INTR_ON);
-  while (timer_elapsed(start) < ticks)
-    thread_yield();
+  struct thread* cur = thread_current();
+  cur->wake_up_tick = timer_ticks() + ticks;
+
+  /* Insert the thread into the sleeping list in order */
+  list_insert_ordered(&sleep_list, &cur->elem, wake_up_less, NULL);
+
+  /* Block the current thread*/
+  thread_block();
+
+  /* Restore the interrupt state */
+  intr_set_level(old_level);
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -129,6 +139,18 @@ void timer_print_stats(void) { printf("Timer: %" PRId64 " ticks\n", timer_ticks(
 static void timer_interrupt(struct intr_frame* args UNUSED) {
   ticks++;
   thread_tick();
+
+  /* Wake up all threads due */
+  while (!list_empty(&sleep_list)) {
+    struct list_elem* e = list_front(&sleep_list);
+    struct thread* thr = list_entry(e, struct thread, elem);
+    if (thr->wake_up_tick <= ticks) {
+      list_pop_front(&sleep_list);
+      thread_unblock(thr);
+    } else {
+      break;
+    }
+  }
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer

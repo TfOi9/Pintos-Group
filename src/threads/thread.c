@@ -4,6 +4,7 @@
 #include <random.h>
 #include <stdio.h>
 #include <string.h>
+#include "list.h"
 #include "threads/flags.h"
 #include "threads/interrupt.h"
 #include "threads/intr-stubs.h"
@@ -27,6 +28,10 @@ static struct list fifo_ready_list;
 /* List of all processes.  Processes are added to this list
    when they are first scheduled and removed when they exit. */
 static struct list all_list;
+
+/* List of processes that are asleep.  Process are added to this
+    when they fall asleep. They are sorted by wake-up ticks.*/
+struct list sleep_list;
 
 /* Idle thread. */
 static struct thread* idle_thread;
@@ -109,6 +114,7 @@ void thread_init(void) {
   lock_init(&tid_lock);
   list_init(&fifo_ready_list);
   list_init(&all_list);
+  list_init(&sleep_list);
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread();
@@ -564,3 +570,10 @@ static tid_t allocate_tid(void) {
 /* Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof(struct thread, stack);
+
+/* List element comparator by wake-up tick. */
+bool wake_up_less(const struct list_elem* a, const struct list_elem* b, void* aux) {
+  struct thread* thr_a = list_entry(a, struct thread, elem);
+  struct thread* thr_b = list_entry(b, struct thread, elem);
+  return thr_a->wake_up_tick < thr_b->wake_up_tick;
+}
