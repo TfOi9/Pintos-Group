@@ -1,4 +1,4 @@
-## Process Control Syscalls
+# Process Control Syscalls
 
 在先前的默认 syscall 处理代码中，直接对 `args[idx]` 解引用。如果此时实际传入的参数错误，将导致（内核）非法内存访问，直接炸内核。因此，我们需要先实现用户内存访问合法性判断，以及安全拷贝用户内存内容。
 
@@ -82,7 +82,7 @@
 
 #### 文件描述符复制
 
-TBD
+请见 `file_operation_syscalls.md`。
 
 #### 参数传递
 
